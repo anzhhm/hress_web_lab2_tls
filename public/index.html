@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Lab 3 - OIDC Integration</title>
+    <style>
+        body { font-family: sans-serif; margin: 40px; }
+        button { padding: 10px 15px; margin-right: 10px; cursor: pointer; }
+        #userInfo { margin-top: 20px; padding: 15px; border: 1px solid #ccc; background: #f9f9f9; display: none; }
+    </style>
+</head>
+<body>
+
+    <h1>Лабораторна робота 3 (Anzhelika-Mariia Hress)</h1>
+    <p>Статус: <span id="status">Невідомо</span></p>
+
+    <button onclick="window.location.href='/login'">Login (через Casdoor)</button>
+    <button onclick="window.location.href='/user-info'">Get User Info</button>
+    <button onclick="window.location.href='/logout'">Logout</button>
+
+    <div id="userInfo"></div>
+
+    <script>
+        async function fetchUserInfo() {
+            const userInfoDiv = document.getElementById('userInfo');
+            const statusSpan = document.getElementById('status');
+            
+            try {
+                const response = await fetch('/user-info');
+                console.log("Статус відповіді сервера:", response.status);
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    console.log("Отримані дані від Casdoor:", data);
+                    
+                    statusSpan.textContent = "Авторизовано";
+                    statusSpan.style.color = "green";
+                    
+                    userInfoDiv.style.display = 'block';
+                    userInfoDiv.innerHTML = `
+                        <strong>User ID:</strong> ${data.sub || data.id || 'Не знайдено'} <br>
+                        <strong>Username:</strong> ${data.name || data.preferred_username || 'Не знайдено'} <br>
+                        <strong>Email:</strong> ${data.email || 'Не вказано'}
+                    `;
+                } else if (response.status === 401) {
+                    statusSpan.textContent = "Не авторизовано (401 Unauthorized)";
+                    statusSpan.style.color = "red";
+                    userInfoDiv.style.display = 'block';
+                    userInfoDiv.innerHTML = "<em>Доступ заборонено. Кукі не передались або токен недійсний.</em>";
+                } else {
+                    console.error("Неочікувана помилка сервера:", response.status);
+                }
+            } catch (error) {
+                console.error("Помилка JavaScript:", error);
+            }
+        }
+        
+        window.onload = fetchUserInfo;
+    </script>
+
+</body>
+</html>

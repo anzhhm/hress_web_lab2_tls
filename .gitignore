@@ -2,3 +2,4 @@ node_modules/
 npm-debug.log
 localhost-key.pem
 localhost.pem
+.env
