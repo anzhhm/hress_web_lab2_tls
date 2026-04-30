@@ -6,6 +6,8 @@ const express = require('express');
 const axios = require('axios');
 const cookieParser = require('cookie-parser');
 const path = require('path');
+const jwt = require('jsonwebtoken');
+const jwksClient = require('jwks-rsa');
 
 const app = express();
 
@@ -19,6 +21,21 @@ const CLIENT_SECRET = process.env.CASDOOR_CLIENT_SECRET;
 const REDIRECT_URI = process.env.CASDOOR_REDIRECT_URI;
 
 const httpsAgent = new https.Agent({ rejectUnauthorized: false });
+
+const client = jwksClient({
+  jwksUri: `${CASDOOR_ENDPOINT}/.well-known/jwks`,
+  requestAgent: httpsAgent 
+});
+
+function getKey(header, callback) {
+  client.getSigningKey(header.kid, function(err, key) {
+    if (err) {
+        return callback(err, null);
+    }
+    const signingKey = key.publicKey || key.rsaPublicKey;
+    callback(null, signingKey);
+  });
+}
 
 app.get('/login', (req, res) => {
     const authUrl = `${CASDOOR_ENDPOINT}/login/oauth/authorize?client_id=${CLIENT_ID}&response_type=code&redirect_uri=${REDIRECT_URI}&scope=openid profile email`;
@@ -62,24 +79,21 @@ app.get('/callback', async (req, res) => {
     }
 });
 
-app.get('/user-info', async (req, res) => {
+app.get('/user-info', (req, res) => {
     const token = req.cookies.access_token;
     
     if (!token) {
         return res.status(401).json({ error: 'Unauthorized: No token provided' });
     }
 
-    try {
-        // Валідація токена та отримання інформації через IAM
-        const response = await axios.get(`${CASDOOR_ENDPOINT}/api/userinfo`, {
-            headers: { Authorization: `Bearer ${token}` },
-            httpsAgent
-        });
+    jwt.verify(token, getKey, { algorithms: ['RS256'] }, (err, decoded) => {
+        if (err) {
+            console.error('Помилка валідації токена:', err.message);
+            return res.status(401).json({ error: 'Unauthorized: Invalid token signature' });
+        }
         
-        res.json(response.data);
-    } catch (err) {
-        res.status(401).json({ error: 'Unauthorized: Invalid token' });
-    }
+        res.json(decoded);
+    });
 });
 
 app.get('/logout', (req, res) => {
