@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+message PriceUpdate {
+  string symbol    = 1;
+  string price     = 2;
+  int64  timestamp = 3;
+  string change    = 4;  // % change (24h)
+  string volume    = 5;  // base volume (24h)
+  string high      = 6;  // 24h high
+  string low       = 7;  // 24h low
+}
+
+message ClientMessage {
+  string          action  = 1;   // "subscribe" | "unsubscribe"
+  repeated string symbols = 2;   // e.g. ["BTCUSDT", "ETHUSDT"]
+}

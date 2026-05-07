@@ -3,37 +3,78 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Web Lab 3 - OIDC Integration</title>
+    <title>Web Lab 4 - OIDC & WebSockets (Protobuf)</title>
+    <script src="https://cdn.jsdelivr.net/npm/protobufjs@7.2.5/dist/protobuf.min.js"></script>
     <style>
-        body { font-family: sans-serif; margin: 40px; }
-        button { padding: 10px 15px; margin-right: 10px; cursor: pointer; }
-        #userInfo { margin-top: 20px; padding: 15px; border: 1px solid #ccc; background: #f9f9f9; display: none; }
+        body { font-family: sans-serif; margin: 40px; background-color: #f4f4f9; color: #333; }
+        h1, h2 { color: #2c3e50; }
+        .card { background: white; padding: 20px; margin-bottom: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        button { padding: 8px 16px; margin-right: 10px; cursor: pointer; border: none; border-radius: 4px; background: #3498db; color: white; font-weight: bold; }
+        button:hover { background: #2980b9; }
+        button.danger { background: #e74c3c; }
+        button.danger:hover { background: #c0392b; }
+        input[type="text"] { padding: 8px; width: 200px; border: 1px solid #ccc; border-radius: 4px; }
+        #userInfo { margin-top: 15px; padding: 15px; border-left: 4px solid #2ecc71; background: #f9f9f9; display: none; }
+        
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background-color: #f8f9fa; }
+        .positive { color: green; font-weight: bold; }
+        .negative { color: red; font-weight: bold; }
     </style>
 </head>
 <body>
 
-    <h1>Лабораторна робота 3 (Anzhelika-Mariia Hress)</h1>
-    <p>Статус: <span id="status">Невідомо</span></p>
+    <div class="card">
+        <h1>Лабораторна робота 4 (OIDC + WebSockets Protobuf)</h1>
+        <p>Статус OIDC: <span id="status">Невідомо</span></p>
 
-    <button onclick="window.location.href='/login'">Login (через Casdoor)</button>
-    <button onclick="window.location.href='/user-info'">Get User Info</button>
-    <button onclick="window.location.href='/logout'">Logout</button>
+        <button onclick="window.location.href='/login'">Login (Casdoor)</button>
+        <button onclick="fetchUserInfo()">Get User Info</button>
+        <button onclick="window.location.href='/logout'" class="danger">Logout</button>
 
-    <div id="userInfo"></div>
+        <div id="userInfo"></div>
+    </div>
+
+    <div class="card" id="wsPanel" style="display: none;">
+        <h2>Дані з Binance (WebSocket)</h2>
+        <p>Статус WS: <span id="wsStatus" style="font-weight: bold; color: orange;">Підключення...</span></p>
+        
+        <div style="margin-bottom: 15px;">
+            <input type="text" id="symbolInput" placeholder="Напр. btcusdt, ethusdt" />
+            <button onclick="manageSubscription('subscribe')">Підписатися</button>
+            <button onclick="manageSubscription('unsubscribe')" class="danger">Відписатися</button>
+        </div>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Символ</th>
+                    <th>Ціна</th>
+                    <th>Зміна (24h)</th>
+                    <th>Об'єм</th>
+                    <th>High</th>
+                    <th>Low</th>
+                    <th>Останнє оновлення</th>
+                </tr>
+            </thead>
+            <tbody id="cryptoTableBody">
+            </tbody>
+        </table>
+    </div>
 
     <script>
+        // ─── 1. OIDC Логіка ───────────────────────────────────────────────────
         async function fetchUserInfo() {
             const userInfoDiv = document.getElementById('userInfo');
             const statusSpan = document.getElementById('status');
+            const wsPanel = document.getElementById('wsPanel');
             
             try {
                 const response = await fetch('/user-info');
-                console.log("Статус відповіді сервера:", response.status);
                 
                 if (response.ok) {
                     const data = await response.json();
-                    console.log("Отримані дані від Casdoor:", data);
-                    
                     statusSpan.textContent = "Авторизовано";
                     statusSpan.style.color = "green";
                     
@@ -43,21 +84,146 @@
                         <strong>Username:</strong> ${data.name || data.preferred_username || 'Не знайдено'} <br>
                         <strong>Email:</strong> ${data.email || 'Не вказано'}
                     `;
-                } else if (response.status === 401) {
+                    
+                    // Якщо користувач авторизований, показуємо панель вебсокетів та ініціалізуємо підключення
+                    wsPanel.style.display = 'block';
+                    initWebSocket();
+                    
+                } else {
                     statusSpan.textContent = "Не авторизовано (401 Unauthorized)";
                     statusSpan.style.color = "red";
                     userInfoDiv.style.display = 'block';
-                    userInfoDiv.innerHTML = "<em>Доступ заборонено. Кукі не передались або токен недійсний.</em>";
-                } else {
-                    console.error("Неочікувана помилка сервера:", response.status);
+                    userInfoDiv.innerHTML = "<em>Доступ заборонено. Кукі не передались або токен недійсний. Увійдіть у систему.</em>";
                 }
             } catch (error) {
-                console.error("Помилка JavaScript:", error);
+                console.error("Помилка JavaScript при перевірці юзера:", error);
             }
         }
-        
-        window.onload = fetchUserInfo;
-    </script>
 
+        window.onload = fetchUserInfo;
+
+        // ─── 2. WebSocket & Protobuf Логіка ───────────────────────────────────
+        
+        let ws;
+        let PriceUpdateMessage;
+
+        // Завантаження схеми protobuf з бекенда
+        protobuf.load("/market.proto", function(err, root) {
+            if (err) {
+                console.error("Помилка завантаження market.proto:", err);
+                return;
+            }
+            PriceUpdateMessage = root.lookupType("PriceUpdate");
+            console.log("Protobuf schema завантажена успішно.");
+        });
+
+        function initWebSocket() {
+            if (ws && ws.readyState === WebSocket.OPEN) return;
+
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws`;
+            
+            ws = new WebSocket(wsUrl);
+            
+            ws.binaryType = "arraybuffer";
+
+            const wsStatus = document.getElementById('wsStatus');
+
+            ws.onopen = () => {
+                wsStatus.textContent = "Підключено";
+                wsStatus.style.color = "green";
+                console.log("[WS] З'єднання встановлено");
+            };
+
+            ws.onmessage = (event) => {
+                // Якщо приходить рядок — це JSON (підтвердження підписки/помилки)
+                if (typeof event.data === "string") {
+                    const msg = JSON.parse(event.data);
+                    console.log("[WS JSON]:", msg);
+                    if (msg.type === 'unsubscribed') {
+                        msg.symbols.forEach(sym => removeRow(sym));
+                    }
+                } 
+                // Якщо приходять бінарні дані — це Protobuf від Binance
+                else if (event.data instanceof ArrayBuffer) {
+                    if (!PriceUpdateMessage) return;
+
+                    try {
+                        const buffer = new Uint8Array(event.data);
+                        const decodedData = PriceUpdateMessage.decode(buffer);
+                        updateTable(decodedData);
+                    } catch (e) {
+                        console.error("Помилка декодування Protobuf:", e);
+                    }
+                }
+            };
+
+            ws.onerror = (error) => {
+                console.error("[WS Помилка]:", error);
+                wsStatus.textContent = "Помилка підключення";
+                wsStatus.style.color = "red";
+            };
+
+            ws.onclose = (event) => {
+                console.log("[WS] З'єднання закрито", event.code, event.reason);
+                wsStatus.textContent = "Відключено";
+                wsStatus.style.color = "red";
+            };
+        }
+
+        // Функція відправки команд (subscribe / unsubscribe)
+        function manageSubscription(action) {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                alert("WebSocket не підключений. Авторизуйтесь спочатку.");
+                return;
+            }
+
+            const input = document.getElementById('symbolInput').value;
+            if (!input) return;
+
+            const symbols = input.split(',').map(s => s.trim());
+
+            const message = { action, symbols };
+            ws.send(JSON.stringify(message));
+            console.log(`[WS] Відправлено:`, message);
+        }
+
+        // ─── UI ──────────────────────────────────────────────────
+
+        function updateTable(data) {
+            const tbody = document.getElementById('cryptoTableBody');
+            const rowId = `row-${data.symbol}`;
+            let row = document.getElementById(rowId);
+
+            const changeClass = parseFloat(data.change) >= 0 ? 'positive' : 'negative';
+            const timeString = new Date(Number(data.timestamp)).toLocaleTimeString();
+
+            const htmlContent = `
+                <td><strong>${data.symbol}</strong></td>
+                <td>${Number(data.price).toFixed(2)}</td>
+                <td class="${changeClass}">${Number(data.change).toFixed(2)}%</td>
+                <td>${Number(data.volume).toFixed(2)}</td>
+                <td>${Number(data.high).toFixed(2)}</td>
+                <td>${Number(data.low).toFixed(2)}</td>
+                <td>${timeString}</td>
+            `;
+
+            if (row) {
+                row.innerHTML = htmlContent;
+                row.style.backgroundColor = 'rgba(46, 204, 113, 0.2)';
+                setTimeout(() => row.style.backgroundColor = 'transparent', 300);
+            } else {
+                row = document.createElement('tr');
+                row.id = rowId;
+                row.innerHTML = htmlContent;
+                tbody.appendChild(row);
+            }
+        }
+
+        function removeRow(symbol) {
+            const row = document.getElementById(`row-${symbol.toUpperCase()}`);
+            if (row) row.remove();
+        }
+    </script>
 </body>
 </html>
